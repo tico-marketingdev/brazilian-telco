@@ -1,0 +1,269 @@
+"""
+ETL — Anatel → Supabase
+Serviços: SMP (Telefonia Móvel) + SCM (Banda Larga Fixa)
+Janela:   2020–2025
+
+Uso:
+    python pipeline/anatel_etl.py --step all
+    python pipeline/anatel_etl.py --step municipios
+    python pipeline/anatel_etl.py --step movel
+    python pipeline/anatel_etl.py --step banda_larga
+"""
+
+import os, sys, argparse, logging, requests, zipfile, io
+from datetime import datetime, date
+import pandas as pd
+from dotenv import load_dotenv
+from supabase import create_client, Client
+from tqdm import tqdm
+
+load_dotenv()
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout), logging.FileHandler("etl.log", encoding="utf-8")],
+)
+log = logging.getLogger(__name__)
+
+ANO_INICIO = int(os.getenv("ANO_INICIO_OVERRIDE") or 2020)
+ANO_FIM    = int(os.getenv("ANO_FIM_OVERRIDE")    or 2025)
+
+BASE_URL   = "https://www.anatel.gov.br/dadosabertos/PDA/Acessos"
+URLS_SMP   = {ano: f"{BASE_URL}/SMP/{ano}.zip" for ano in range(ANO_INICIO, ANO_FIM + 1)}
+URLS_SCM   = {ano: f"{BASE_URL}/SCM/{ano}.zip" for ano in range(ANO_INICIO, ANO_FIM + 1)}
+URL_IBGE   = "https://servicodados.ibge.gov.br/api/v1/localidades/municipios?orderBy=nome"
+
+MAPA_OPERADORAS = {
+    "CLARO": "Claro", "TELEFONICA": "Vivo", "TELEFÔNICA": "Vivo", "VIVO": "Vivo",
+    "TIM": "TIM", "OI": "Oi", "SKY": "SKY",
+}
+
+def normalizar_operadora(nome):
+    if not isinstance(nome, str):
+        return "Outras"
+    n = nome.strip().upper()
+    for k, v in MAPA_OPERADORAS.items():
+        if k in n:
+            return v
+    return "Outras"
+
+def get_supabase():
+    url = os.getenv("SUPABASE_URL")
+    key = os.getenv("SUPABASE_KEY")
+    if not url or not key:
+        raise EnvironmentError("Defina SUPABASE_URL e SUPABASE_KEY no .env")
+    return create_client(url, key)
+
+def baixar_zip(url):
+    log.info(f"Baixando: {url}")
+    r = requests.get(url, timeout=120)
+    r.raise_for_status()
+    dfs = []
+    with zipfile.ZipFile(io.BytesIO(r.content)) as z:
+        for nome in [n for n in z.namelist() if n.lower().endswith(".csv")]:
+            with z.open(nome) as f:
+                try:
+                    df = pd.read_csv(f, sep=";", encoding="utf-8-sig", dtype=str, low_memory=False)
+                    df.columns = [c.strip().lower().replace(" ", "_") for c in df.columns]
+                    dfs.append(df)
+                    log.info(f"  {nome}: {len(df):,} linhas")
+                except Exception as e:
+                    log.warning(f"  Erro {nome}: {e}")
+    return dfs
+
+def registrar_log(sb, tabela, arquivo, data_ref, status, ok=0, err=0, msg=None):
+    sb.schema("anatel").table("etl_log").insert({
+        "tabela_destino": tabela, "arquivo_origem": arquivo,
+        "data_referencia": data_ref.isoformat() if data_ref else None,
+        "status": status, "linhas_inseridas": ok, "linhas_erro": err, "mensagem_erro": msg,
+    }).execute()
+
+def upsert_lotes(sb, tabela, registros, lote=500):
+    ok = err = 0
+    for i in tqdm(range(0, len(registros), lote), desc=f"  upsert {tabela}"):
+        bloco = registros[i:i+lote]
+        try:
+            sb.schema("anatel").table(tabela).upsert(bloco).execute()
+            ok += len(bloco)
+        except Exception as e:
+            log.error(f"  Lote {i}: {e}")
+            err += len(bloco)
+    return ok, err
+
+# ── Steps ─────────────────────────────────────────────────────────────────────
+
+def etl_municipios(sb):
+    log.info("=" * 60)
+    log.info("STEP: dim_municipios")
+    dados = requests.get(URL_IBGE, timeout=60).json()
+    CAPITAIS = {3550308,3304557,3106200,2927408,2304400,1302603,4106902,2611606,
+                5300108,4314902,1501402,2800308,5208707,2111300,3205309,4205407,
+                1200401,1600303,2900702,2408102,2211001,1721000,1100205,1400100,
+                5002704,5103403,2507507}
+    registros = [{
+        "cod_ibge":       int(m["id"]),
+        "nome_municipio": m["nome"],
+        "sigla_uf":       m["microrregiao"]["mesorregiao"]["UF"]["sigla"],
+        "capital":        int(m["id"]) in CAPITAIS,
+    } for m in dados]
+    log.info(f"  {len(registros):,} municípios")
+    ok, err = upsert_lotes(sb, "dim_municipios", registros)
+    registrar_log(sb, "dim_municipios", URL_IBGE, None, "sucesso" if err==0 else "parcial", ok, err)
+    log.info(f"  ✓ {ok:,} inseridos | ✗ {err:,} erros")
+
+COLS_SMP = {
+    "ano":"ano","mes":"mes","cod_municipio_ibge":"cod_ibge",
+    "codigo_municipio_ibge":"cod_ibge","empresa":"_emp","prestadora":"_emp",
+    "tecnologia":"_tec","natureza":"_nat","acessos":"acessos_total","quantidade":"acessos_total",
+}
+
+def etl_movel(sb):
+    log.info("=" * 60)
+    log.info("STEP: fato_movel (SMP)")
+    mapa_op = {r["nome_operadora"]: r["id_operadora"]
+               for r in sb.schema("anatel").table("dim_operadoras").select("*").execute().data}
+    total_ok = total_err = 0
+    for ano, url in URLS_SMP.items():
+        log.info(f"\n── {ano}")
+        try:
+            dfs = baixar_zip(url)
+        except requests.HTTPError as e:
+            log.warning(f"  Pulando {ano}: {e}")
+            registrar_log(sb, "fato_movel", url, None, "erro", msg=str(e))
+            continue
+        for df in dfs:
+            df = df.rename(columns={c: COLS_SMP.get(c, c) for c in df.columns})
+            if "cod_ibge" not in df.columns:
+                continue
+            df["ano"] = pd.to_numeric(df.get("ano", ano), errors="coerce").fillna(ano).astype(int)
+            df["mes"] = pd.to_numeric(df.get("mes", 1),   errors="coerce").astype("Int64")
+            df["cod_ibge"] = pd.to_numeric(df["cod_ibge"], errors="coerce").astype("Int64")
+            df["acessos_total"] = pd.to_numeric(df.get("acessos_total", 0), errors="coerce").fillna(0).astype(int)
+            df = df[df["ano"].between(ANO_INICIO, ANO_FIM)].dropna(subset=["cod_ibge","mes"])
+            df["data_referencia"] = pd.to_datetime(
+                df["ano"].astype(str)+"-"+df["mes"].astype(str).str.zfill(2)+"-01", errors="coerce").dt.date
+            df["_op"] = df.get("_emp", pd.Series(dtype=str)).apply(normalizar_operadora)
+            for col in ["acessos_2g","acessos_3g","acessos_4g","acessos_5g","acessos_prepago","acessos_pospago"]:
+                if col not in df.columns: df[col] = None
+            if "_tec" in df.columns:
+                t = df["_tec"].str.upper().fillna("")
+                for g, c in [("2G","acessos_2g"),("3G","acessos_3g"),("4G","acessos_4g"),("5G","acessos_5g")]:
+                    df.loc[t.str.contains(g), c] = df["acessos_total"]
+            if "_nat" in df.columns:
+                n = df["_nat"].str.upper().fillna("")
+                df.loc[n.str.contains("PRÉ|PRE"), "acessos_prepago"] = df["acessos_total"]
+                df.loc[n.str.contains("PÓS|POS"), "acessos_pospago"] = df["acessos_total"]
+            df = df.groupby(["data_referencia","ano","mes","_op","cod_ibge"], as_index=False).agg({
+                "acessos_total":"sum","acessos_prepago":"sum","acessos_pospago":"sum",
+                "acessos_2g":"sum","acessos_3g":"sum","acessos_4g":"sum","acessos_5g":"sum"})
+            df["id_operadora"] = df["_op"].map(mapa_op)
+            df = df.dropna(subset=["id_operadora"])
+            registros = [{
+                "data_referencia": row["data_referencia"].isoformat(),
+                "ano": int(row["ano"]), "mes": int(row["mes"]),
+                "id_operadora": int(row["id_operadora"]), "cod_ibge": int(row["cod_ibge"]),
+                "acessos_total":   int(row["acessos_total"])   if pd.notna(row["acessos_total"])   else None,
+                "acessos_prepago": int(row["acessos_prepago"]) if pd.notna(row.get("acessos_prepago")) else None,
+                "acessos_pospago": int(row["acessos_pospago"]) if pd.notna(row.get("acessos_pospago")) else None,
+                "acessos_2g": int(row["acessos_2g"]) if pd.notna(row.get("acessos_2g")) else None,
+                "acessos_3g": int(row["acessos_3g"]) if pd.notna(row.get("acessos_3g")) else None,
+                "acessos_4g": int(row["acessos_4g"]) if pd.notna(row.get("acessos_4g")) else None,
+                "acessos_5g": int(row["acessos_5g"]) if pd.notna(row.get("acessos_5g")) else None,
+                "fonte_arquivo": url,
+            } for _, row in df.iterrows()]
+            ok, err = upsert_lotes(sb, "fato_movel", registros)
+            total_ok += ok; total_err += err
+            registrar_log(sb, "fato_movel", url, df["data_referencia"].min() if not df.empty else None,
+                          "sucesso" if err==0 else "parcial", ok, err)
+    log.info(f"\n✓ fato_movel: {total_ok:,} inseridos | {total_err:,} erros")
+
+COLS_SCM = {
+    "ano":"ano","mes":"mes","cod_municipio_ibge":"cod_ibge","codigo_municipio_ibge":"cod_ibge",
+    "empresa":"_emp","prestadora":"_emp","tecnologia":"tecnologia","meio_acesso":"tecnologia",
+    "velocidade":"velocidade_contratada","faixa_velocidade":"velocidade_contratada",
+    "acessos":"acessos_total","quantidade":"acessos_total",
+}
+
+def etl_banda_larga(sb):
+    log.info("=" * 60)
+    log.info("STEP: fato_banda_larga (SCM)")
+    mapa_op = {r["nome_operadora"]: r["id_operadora"]
+               for r in sb.schema("anatel").table("dim_operadoras").select("*").execute().data}
+    total_ok = total_err = 0
+    for ano, url in URLS_SCM.items():
+        log.info(f"\n── {ano}")
+        try:
+            dfs = baixar_zip(url)
+        except requests.HTTPError as e:
+            log.warning(f"  Pulando {ano}: {e}")
+            registrar_log(sb, "fato_banda_larga", url, None, "erro", msg=str(e))
+            continue
+        for df in dfs:
+            df = df.rename(columns={c: COLS_SCM.get(c, c) for c in df.columns})
+            if "cod_ibge" not in df.columns:
+                continue
+            df["ano"] = pd.to_numeric(df.get("ano", ano), errors="coerce").fillna(ano).astype(int)
+            df["mes"] = pd.to_numeric(df.get("mes", 1),   errors="coerce").astype("Int64")
+            df["cod_ibge"] = pd.to_numeric(df["cod_ibge"], errors="coerce").astype("Int64")
+            df["acessos_total"] = pd.to_numeric(df.get("acessos_total", 0), errors="coerce").fillna(0).astype(int)
+            df = df[df["ano"].between(ANO_INICIO, ANO_FIM)].dropna(subset=["cod_ibge","mes"])
+            df["data_referencia"] = pd.to_datetime(
+                df["ano"].astype(str)+"-"+df["mes"].astype(str).str.zfill(2)+"-01", errors="coerce").dt.date
+            df["_op"] = df.get("_emp", pd.Series(dtype=str)).apply(normalizar_operadora)
+            if "tecnologia" in df.columns:
+                t = df["tecnologia"].str.upper().fillna("")
+                df["acessos_fibra"]    = df["acessos_total"].where(t.str.contains("FIBRA|FTT"), 0)
+                df["acessos_cabo"]     = df["acessos_total"].where(t.str.contains("CABO|HFC"),  0)
+                df["acessos_xdsl"]     = df["acessos_total"].where(t.str.contains("DSL"),       0)
+                df["acessos_radio"]    = df["acessos_total"].where(t.str.contains("RÁDIO|RADIO|WI-FI|WIMAX"), 0)
+                df["acessos_satelite"] = df["acessos_total"].where(t.str.contains("SATÉL|SATEL"), 0)
+                df["tecnologia"] = df["tecnologia"].str.strip().str.title()
+            else:
+                for col in ["acessos_fibra","acessos_cabo","acessos_xdsl","acessos_radio","acessos_satelite"]:
+                    df[col] = None
+            if "velocidade_contratada" not in df.columns:
+                df["velocidade_contratada"] = None
+            df = df.groupby(
+                ["data_referencia","ano","mes","_op","cod_ibge","tecnologia","velocidade_contratada"],
+                as_index=False, dropna=False
+            ).agg({"acessos_total":"sum","acessos_fibra":"sum","acessos_cabo":"sum",
+                   "acessos_xdsl":"sum","acessos_radio":"sum","acessos_satelite":"sum"})
+            df["id_operadora"] = df["_op"].map(mapa_op)
+            df = df.dropna(subset=["id_operadora"])
+            registros = [{
+                "data_referencia": row["data_referencia"].isoformat(),
+                "ano": int(row["ano"]), "mes": int(row["mes"]),
+                "id_operadora": int(row["id_operadora"]), "cod_ibge": int(row["cod_ibge"]),
+                "tecnologia": str(row["tecnologia"]) if pd.notna(row.get("tecnologia")) else None,
+                "velocidade_contratada": str(row["velocidade_contratada"]) if pd.notna(row.get("velocidade_contratada")) else None,
+                "acessos_total":    int(row["acessos_total"])    if pd.notna(row["acessos_total"])    else None,
+                "acessos_fibra":    int(row["acessos_fibra"])    if pd.notna(row.get("acessos_fibra"))    else None,
+                "acessos_cabo":     int(row["acessos_cabo"])     if pd.notna(row.get("acessos_cabo"))     else None,
+                "acessos_xdsl":     int(row["acessos_xdsl"])     if pd.notna(row.get("acessos_xdsl"))     else None,
+                "acessos_radio":    int(row["acessos_radio"])    if pd.notna(row.get("acessos_radio"))    else None,
+                "acessos_satelite": int(row["acessos_satelite"]) if pd.notna(row.get("acessos_satelite")) else None,
+                "fonte_arquivo": url,
+            } for _, row in df.iterrows()]
+            ok, err = upsert_lotes(sb, "fato_banda_larga", registros)
+            total_ok += ok; total_err += err
+            registrar_log(sb, "fato_banda_larga", url, df["data_referencia"].min() if not df.empty else None,
+                          "sucesso" if err==0 else "parcial", ok, err)
+    log.info(f"\n✓ fato_banda_larga: {total_ok:,} inseridos | {total_err:,} erros")
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--step", choices=["municipios","movel","banda_larga","all"], default="all")
+    args = parser.parse_args()
+    sb = get_supabase()
+    log.info(f"Conectado ao Supabase ✓ | step={args.step} | {ANO_INICIO}–{ANO_FIM}")
+    inicio = datetime.now()
+    if args.step in ("municipios","all"): etl_municipios(sb)
+    if args.step in ("movel","all"):      etl_movel(sb)
+    if args.step in ("banda_larga","all"):etl_banda_larga(sb)
+    log.info(f"ETL finalizado em {datetime.now() - inicio}")
+
+if __name__ == "__main__":
+    main()

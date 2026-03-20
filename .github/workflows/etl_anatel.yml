@@ -1,0 +1,59 @@
+name: ETL Anatel → Supabase
+
+on:
+  schedule:
+    - cron: "0 9 1 * *"   # dia 1 de cada mês às 06:00 BRT (09:00 UTC)
+  workflow_dispatch:
+    inputs:
+      step:
+        description: "Qual step executar?"
+        required: true
+        default: "all"
+        type: choice
+        options: [all, municipios, movel, banda_larga]
+      ano_inicio:
+        description: "Ano de início (opcional)"
+        required: false
+        default: ""
+      ano_fim:
+        description: "Ano de fim (opcional)"
+        required: false
+        default: ""
+
+jobs:
+  etl:
+    name: Executar ETL
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Instalar dependências
+        run: pip install -r requirements.txt
+
+      - name: Executar ETL
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          ANO_INICIO_OVERRIDE: ${{ github.event.inputs.ano_inicio }}
+          ANO_FIM_OVERRIDE:    ${{ github.event.inputs.ano_fim }}
+        run: |
+          STEP="${{ github.event.inputs.step || 'all' }}"
+          echo "Rodando step: $STEP"
+          python pipeline/anatel_etl.py --step "$STEP"
+
+      - name: Salvar log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: etl-log-${{ github.run_id }}
+          path: etl.log
+          retention-days: 30
