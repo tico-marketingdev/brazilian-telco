@@ -210,8 +210,8 @@ COLS_SCM = {
 def etl_banda_larga(sb):
     log.info("=" * 60)
     log.info("STEP: fato_banda_larga (SCM)")
-    mapa_op = {r["nome_operadora"]: r["id_operadora"]
-               for r in sb.table("anatel.nome_da_tabela")}
+    res = sb.table("anatel.dim_operadoras").select("*").execute()  # busca os dados
+    mapa_op = {r["nome_operadora"]: r["id_operadora"] for r in res.data}  # monta o dicionário
     total_ok = total_err = 0
     for ano, url in URLS_SCM.items():
         log.info(f"\n── {ano}")
