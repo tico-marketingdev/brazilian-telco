@@ -73,10 +73,14 @@ def baixar_zip(url):
     return dfs
 
 def registrar_log(sb, tabela, arquivo, data_ref, status, ok=0, err=0, msg=None):
-    sb.schema("anatel").table("etl_log").insert({
-        "tabela_destino": tabela, "arquivo_origem": arquivo,
+    sb.table("anatel.etl_log").insert({
+        "tabela_destino": tabela,
+        "arquivo_origem": arquivo,
         "data_referencia": data_ref.isoformat() if data_ref else None,
-        "status": status, "linhas_inseridas": ok, "linhas_erro": err, "mensagem_erro": msg,
+        "status": status,
+        "linhas_inseridas": ok,
+        "linhas_erro": err,
+        "mensagem_erro": msg,
     }).execute()
 
 def upsert_lotes(sb, tabela, registros, lote=500):
@@ -84,7 +88,7 @@ def upsert_lotes(sb, tabela, registros, lote=500):
     for i in tqdm(range(0, len(registros), lote), desc=f"  upsert {tabela}"):
         bloco = registros[i:i+lote]
         try:
-            sb.schema("anatel").table(tabela).upsert(bloco).execute()
+            sb.table(f"anatel.{tabela}").upsert(bloco).execute()
             ok += len(bloco)
         except Exception as e:
             log.error(f"  Lote {i}: {e}")
@@ -101,13 +105,31 @@ def etl_municipios(sb):
                 5300108,4314902,1501402,2800308,5208707,2111300,3205309,4205407,
                 1200401,1600303,2900702,2408102,2211001,1721000,1100205,1400100,
                 5002704,5103403,2507507}
+
+    # ← função auxiliar declarada DENTRO de etl_municipios
+    def extrair_uf(m):
+        try:
+            return m["microrregiao"]["mesorregiao"]["UF"]["sigla"]
+        except (KeyError, TypeError):
+            try:
+                return m["regiao-imediata"]["regiao-intermediaria"]["UF"]["sigla"]
+            except (KeyError, TypeError):
+                return None
+
     registros = [{
         "cod_ibge":       int(m["id"]),
         "nome_municipio": m["nome"],
-        "sigla_uf":       m["microrregiao"]["mesorregiao"]["UF"]["sigla"],
+        "sigla_uf":       extrair_uf(m),
         "capital":        int(m["id"]) in CAPITAIS,
     } for m in dados]
+
+    # Remove municípios sem UF resolvida
+    registros = [r for r in registros if r["sigla_uf"] is not None]
+
     log.info(f"  {len(registros):,} municípios")
+    ok, err = upsert_lotes(sb, "dim_municipios", registros)
+    registrar_log(sb, "dim_municipios", URL_IBGE, None, "sucesso" if err==0 else "parcial", ok, err)
+    log.info(f"  ✓ {ok:,} inseridos | ✗ {err:,} erros")
     ok, err = upsert_lotes(sb, "dim_municipios", registros)
     registrar_log(sb, "dim_municipios", URL_IBGE, None, "sucesso" if err==0 else "parcial", ok, err)
     log.info(f"  ✓ {ok:,} inseridos | ✗ {err:,} erros")
@@ -122,7 +144,7 @@ def etl_movel(sb):
     log.info("=" * 60)
     log.info("STEP: fato_movel (SMP)")
     mapa_op = {r["nome_operadora"]: r["id_operadora"]
-               for r in sb.schema("anatel").table("dim_operadoras").select("*").execute().data}
+               for r in sb.table("anatel.nome_da_tabela")}
     total_ok = total_err = 0
     for ano, url in URLS_SMP.items():
         log.info(f"\n── {ano}")
@@ -189,7 +211,7 @@ def etl_banda_larga(sb):
     log.info("=" * 60)
     log.info("STEP: fato_banda_larga (SCM)")
     mapa_op = {r["nome_operadora"]: r["id_operadora"]
-               for r in sb.schema("anatel").table("dim_operadoras").select("*").execute().data}
+               for r in sb.table("anatel.nome_da_tabela")}
     total_ok = total_err = 0
     for ano, url in URLS_SCM.items():
         log.info(f"\n── {ano}")
