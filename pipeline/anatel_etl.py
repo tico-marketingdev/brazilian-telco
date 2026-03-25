@@ -161,8 +161,12 @@ COLS_SMP = {
 
 def etl_movel(sb):
     log.info("=" * 60)
-    log.info("STEP: fato_movel (SMP)")
-    res = sb.postgrest.schema("anatel").from_("dim_operadoras").select("*").execute()
+    conn = psycopg2.connect(os.getenv("DB_URL"))
+        cur = conn.cursor()
+        cur.execute("SELECT nome_operadora, id_operadora FROM anatel.dim_operadoras")
+    mapa_op = {row[0]: row[1] for row in cur.fetchall()}
+        cur.close()
+        conn.close()
     mapa_op = {r["nome_operadora"]: r["id_operadora"] for r in res.data}
     total_ok = total_err = 0
     for ano, url in URLS_SMP.items():
@@ -229,8 +233,12 @@ COLS_SCM = {
 def etl_banda_larga(sb):
     log.info("=" * 60)
     log.info("STEP: fato_banda_larga (SCM)")
-    res = sb.postgrest.schema("anatel").from_("dim_operadoras").select("*").execute()  # busca os dados
-    mapa_op = {r["nome_operadora"]: r["id_operadora"] for r in res.data}  # monta o dicionário
+        conn = psycopg2.connect(os.getenv("DB_URL"))
+        cur = conn.cursor()
+        cur.execute("SELECT nome_operadora, id_operadora FROM anatel.dim_operadoras")
+    mapa_op = {row[0]: row[1] for row in cur.fetchall()}
+        cur.close()
+        conn.close()
     total_ok = total_err = 0
     for ano, url in URLS_SCM.items():
         log.info(f"\n── {ano}")
