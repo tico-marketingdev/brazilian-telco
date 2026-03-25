@@ -73,26 +73,45 @@ def baixar_zip(url):
     return dfs
 
 def registrar_log(sb, tabela, arquivo, data_ref, status, ok=0, err=0, msg=None):
-    sb.schema("anatel").table("etl_log").insert({
-        "tabela_destino": tabela,
-        "arquivo_origem": arquivo,
-        "data_referencia": data_ref.isoformat() if data_ref else None,
-        "status": status,
-        "linhas_inseridas": ok,
-        "linhas_erro": err,
-        "mensagem_erro": msg,
-    }).execute()
+    import psycopg2
+    conn = psycopg2.connect(os.getenv("DB_URL"))
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO anatel.etl_log 
+        (tabela_destino, arquivo_origem, data_referencia, status, linhas_inseridas, linhas_erro, mensagem_erro)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+    """, (tabela, arquivo, data_ref, status, ok, err, msg))
+    conn.commit()
+    cur.close()
+    conn.close()
 
 def upsert_lotes(sb, tabela, registros, lote=500):
+    import psycopg2.extras
     ok = err = 0
+    conn = psycopg2.connect(os.getenv("DB_URL"))
+    cur = conn.cursor()
     for i in tqdm(range(0, len(registros), lote), desc=f"  upsert {tabela}"):
         bloco = registros[i:i+lote]
         try:
-            sb.schema("anatel").table(tabela).upsert(bloco).execute()
+            cols = bloco[0].keys()
+            vals = [[r[c] for c in cols] for r in bloco]
+            col_str = ", ".join(cols)
+            placeholders = ", ".join(["%s"] * len(cols))
+            conflict_col = list(cols)[0]
+            query = f"""
+                INSERT INTO anatel.{tabela} ({col_str})
+                VALUES ({placeholders})
+                ON CONFLICT DO NOTHING
+            """
+            psycopg2.extras.execute_batch(cur, query, vals)
+            conn.commit()
             ok += len(bloco)
         except Exception as e:
+            conn.rollback()
             log.error(f"  Lote {i}: {e}")
             err += len(bloco)
+    cur.close()
+    conn.close()
     return ok, err
 
 # ── Steps ─────────────────────────────────────────────────────────────────────
@@ -143,7 +162,7 @@ COLS_SMP = {
 def etl_movel(sb):
     log.info("=" * 60)
     log.info("STEP: fato_movel (SMP)")
-    res = sb.schema("anatel").table("dim_operadoras").select("*").execute()
+    res = sb.postgrest.schema("anatel").from_("dim_operadoras").select("*").execute()
     mapa_op = {r["nome_operadora"]: r["id_operadora"] for r in res.data}
     total_ok = total_err = 0
     for ano, url in URLS_SMP.items():
@@ -210,7 +229,7 @@ COLS_SCM = {
 def etl_banda_larga(sb):
     log.info("=" * 60)
     log.info("STEP: fato_banda_larga (SCM)")
-    res = sb.schema("anatel").table("dim_operadoras").select("*").execute()  # busca os dados
+    res = sb.postgrest.schema("anatel").from_("dim_operadoras").select("*").execute()  # busca os dados
     mapa_op = {r["nome_operadora"]: r["id_operadora"] for r in res.data}  # monta o dicionário
     total_ok = total_err = 0
     for ano, url in URLS_SCM.items():
