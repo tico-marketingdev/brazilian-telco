@@ -31,8 +31,8 @@ ANO_INICIO = int(os.getenv("ANO_INICIO_OVERRIDE") or 2020)
 ANO_FIM    = int(os.getenv("ANO_FIM_OVERRIDE")    or 2025)
 
 BASE_URL   = "https://www.anatel.gov.br/dadosabertos/PDA/Acessos"
-URLS_SMP   = {ano: f"{BASE_URL}/SMP/{ano}.zip" for ano in range(ANO_INICIO, ANO_FIM + 1)}
-URLS_SCM   = {ano: f"{BASE_URL}/SCM/{ano}.zip" for ano in range(ANO_INICIO, ANO_FIM + 1)}
+URL_SMP = "https://www.anatel.gov.br/dadosabertos/paineis_de_dados/acessos/acessos_telefonia_movel.zip"
+URL_SCM = "https://www.anatel.gov.br/dadosabertos/paineis_de_dados/acessos/acessos_banda_larga_fixa.zip"
 URL_IBGE   = "https://servicodados.ibge.gov.br/api/v1/localidades/municipios?orderBy=nome"
 
 MAPA_OPERADORAS = {
@@ -162,6 +162,7 @@ COLS_SMP = {
 
 def etl_movel(sb):
     log.info("=" * 60)
+    log.info("STEP: fato_movel (SMP)")
     conn = psycopg2.connect(os.getenv("DB_URL"))
     cur = conn.cursor()
     cur.execute("SELECT nome_operadora, id_operadora FROM anatel.dim_operadoras")
@@ -169,15 +170,16 @@ def etl_movel(sb):
     cur.close()
     conn.close()
     total_ok = total_err = 0
-    for ano, url in URLS_SMP.items():
-        log.info(f"\n── {ano}")
-        try:
-            dfs = baixar_zip(url)
-        except requests.HTTPError as e:
-            log.warning(f"  Pulando {ano}: {e}")
-            registrar_log(sb, "fato_movel", url, None, "erro", msg=str(e))
-            continue
-        for df in dfs:
+
+    log.info("Baixando SMP...")
+    try:
+        dfs = baixar_zip(URL_SMP)
+    except requests.HTTPError as e:
+        log.warning(f"  Erro ao baixar SMP: {e}")
+        registrar_log(sb, "fato_movel", URL_SMP, None, "erro", msg=str(e))
+        return
+
+    for df_raw in dfs:
             df = df.rename(columns={c: COLS_SMP.get(c, c) for c in df.columns})
             if "cod_ibge" not in df.columns:
                 continue
@@ -240,15 +242,17 @@ def etl_banda_larga(sb):
     cur.close()
     conn.close()
     total_ok = total_err = 0
-    for ano, url in URLS_SCM.items():
-        log.info(f"\n── {ano}")
-        try:
-            dfs = baixar_zip(url)
-        except requests.HTTPError as e:
-            log.warning(f"  Pulando {ano}: {e}")
-            registrar_log(sb, "fato_banda_larga", url, None, "erro", msg=str(e))
-            continue
-        for df in dfs:
+
+    log.info("Baixando SCM...")
+    try:
+        dfs = baixar_zip(URL_SCM)
+    except requests.HTTPError as e:
+        log.warning(f"  Erro ao baixar SCM: {e}")
+        registrar_log(sb, "fato_banda_larga", URL_SCM, None, "erro", msg=str(e))
+        return
+
+    for df_raw in dfs:
+        # ... resto do processamento permanece igual
             df = df.rename(columns={c: COLS_SCM.get(c, c) for c in df.columns})
             if "cod_ibge" not in df.columns:
                 continue
