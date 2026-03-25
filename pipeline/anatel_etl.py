@@ -233,12 +233,12 @@ COLS_SCM = {
 def etl_banda_larga(sb):
     log.info("=" * 60)
     log.info("STEP: fato_banda_larga (SCM)")
-        conn = psycopg2.connect(os.getenv("DB_URL"))
-        cur = conn.cursor()
-        cur.execute("SELECT nome_operadora, id_operadora FROM anatel.dim_operadoras")
+    conn = psycopg2.connect(os.getenv("DB_URL"))
+    cur = conn.cursor()
+    cur.execute("SELECT nome_operadora, id_operadora FROM anatel.dim_operadoras")
     mapa_op = {row[0]: row[1] for row in cur.fetchall()}
-        cur.close()
-        conn.close()
+    cur.close()
+    conn.close()
     total_ok = total_err = 0
     for ano, url in URLS_SCM.items():
         log.info(f"\n── {ano}")
