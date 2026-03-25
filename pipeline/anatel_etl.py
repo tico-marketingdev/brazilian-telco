@@ -168,7 +168,6 @@ def etl_movel(sb):
     mapa_op = {row[0]: row[1] for row in cur.fetchall()}
     cur.close()
     conn.close()
-    mapa_op = {r["nome_operadora"]: r["id_operadora"] for r in res.data}
     total_ok = total_err = 0
     for ano, url in URLS_SMP.items():
         log.info(f"\n── {ano}")
