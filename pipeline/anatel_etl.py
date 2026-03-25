@@ -10,7 +10,8 @@ Uso:
     python pipeline/anatel_etl.py --step banda_larga
 """
 
-import os, sys, argparse, logging, requests, zipfile, io
+import os, sys, argparse, logging, requests, zipfile, io, psycopg2
+import psycopg2.extras
 from datetime import datetime, date
 import pandas as pd
 from dotenv import load_dotenv
