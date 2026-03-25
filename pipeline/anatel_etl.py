@@ -143,8 +143,8 @@ COLS_SMP = {
 def etl_movel(sb):
     log.info("=" * 60)
     log.info("STEP: fato_movel (SMP)")
-    mapa_op = {r["nome_operadora"]: r["id_operadora"]
-               for r in sb.schema("anatel").table("dim_operadoras").select("*").execute().data}
+    res = sb.schema("anatel").table("dim_operadoras").select("*").execute()
+    mapa_op = {r["nome_operadora"]: r["id_operadora"] for r in res.data}
     total_ok = total_err = 0
     for ano, url in URLS_SMP.items():
         log.info(f"\n── {ano}")
