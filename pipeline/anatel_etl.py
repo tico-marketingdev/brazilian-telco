@@ -73,7 +73,7 @@ def baixar_zip(url):
     return dfs
 
 def registrar_log(sb, tabela, arquivo, data_ref, status, ok=0, err=0, msg=None):
-    sb.table("anatel.etl_log").insert({
+    sb.schema("anatel").table("etl_log").insert({
         "tabela_destino": tabela,
         "arquivo_origem": arquivo,
         "data_referencia": data_ref.isoformat() if data_ref else None,
@@ -88,7 +88,7 @@ def upsert_lotes(sb, tabela, registros, lote=500):
     for i in tqdm(range(0, len(registros), lote), desc=f"  upsert {tabela}"):
         bloco = registros[i:i+lote]
         try:
-            sb.table(f"anatel.{tabela}").upsert(bloco).execute()
+            sb.schema("anatel").table(tabela).upsert(bloco).execute()
             ok += len(bloco)
         except Exception as e:
             log.error(f"  Lote {i}: {e}")
@@ -144,7 +144,7 @@ def etl_movel(sb):
     log.info("=" * 60)
     log.info("STEP: fato_movel (SMP)")
     mapa_op = {r["nome_operadora"]: r["id_operadora"]
-               for r in sb.table("anatel.dim_operadoras").select("*").execute().data}
+               for r in sb.schema("anatel").table("dim_operadoras").select("*").execute().data}
     total_ok = total_err = 0
     for ano, url in URLS_SMP.items():
         log.info(f"\n── {ano}")
@@ -210,7 +210,7 @@ COLS_SCM = {
 def etl_banda_larga(sb):
     log.info("=" * 60)
     log.info("STEP: fato_banda_larga (SCM)")
-    res = sb.table("anatel.dim_operadoras").select("*").execute()  # busca os dados
+    res = sb.schema("anatel").table("dim_operadoras").select("*").execute()  # busca os dados
     mapa_op = {r["nome_operadora"]: r["id_operadora"] for r in res.data}  # monta o dicionário
     total_ok = total_err = 0
     for ano, url in URLS_SCM.items():
