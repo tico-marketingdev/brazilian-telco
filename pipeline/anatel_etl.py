@@ -144,7 +144,7 @@ def etl_movel(sb):
     log.info("=" * 60)
     log.info("STEP: fato_movel (SMP)")
     mapa_op = {r["nome_operadora"]: r["id_operadora"]
-               for r in sb.table("anatel.nome_da_tabela")}
+               for r in sb.table("anatel.dim_operadoras").select("*").execute().data}
     total_ok = total_err = 0
     for ano, url in URLS_SMP.items():
         log.info(f"\n── {ano}")
