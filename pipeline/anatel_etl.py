@@ -267,7 +267,7 @@ def transformar_smp(df, ano):
         id_cols = list(df.columns[~df.columns.isin(meses_cols)])
         df = df.melt(
             id_vars=id_cols,
-            value_vars=meses_cols,
+            value_vars=list(meses_cols),
             var_name="_ano_mes",
             value_name="acessos_total"
         )
