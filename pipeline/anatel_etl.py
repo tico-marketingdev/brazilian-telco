@@ -234,6 +234,62 @@ COLS_SMP = {
     "tecnologia":"_tec","natureza":"_nat","acessos":"acessos_total","quantidade":"acessos_total",
 }
 
+# ── TRANSFORMAÇÃO: normaliza o chunk do SMP para o schema do banco ──
+def transformar_smp(df, ano):
+    """
+    Recebe um chunk bruto do CSV da Anatel e retorna
+    um DataFrame pronto para upsert na fato_movel.
+    """
+    # Mapeamento de colunas do CSV para o schema
+    COLS = {
+        "ano": "ano", "mes": "mes",
+        "cod_municipio_ibge": "cod_ibge",
+        "codigo_municipio_ibge": "cod_ibge",
+        "empresa": "_emp", "prestadora": "_emp",
+        "tecnologia": "_tec", "natureza": "_nat",
+        "acessos": "acessos_total", "quantidade": "acessos_total",
+    }
+    df = df.rename(columns={c: COLS.get(c, c) for c in df.columns})
+
+    if "cod_ibge" not in df.columns:
+        return pd.DataFrame()
+
+    # Converte tipos
+    df["ano"]          = pd.to_numeric(df.get("ano", ano), errors="coerce").fillna(ano).astype(int)
+    df["mes"]          = pd.to_numeric(df.get("mes", 1),   errors="coerce").astype("Int64")
+    df["cod_ibge"]     = pd.to_numeric(df["cod_ibge"],     errors="coerce").astype("Int64")
+    df["acessos_total"]= pd.to_numeric(df.get("acessos_total", 0), errors="coerce").fillna(0).astype(int)
+
+    df = df[df["ano"].between(ANO_INICIO, ANO_FIM)].dropna(subset=["cod_ibge", "mes"])
+    if df.empty:
+        return pd.DataFrame()
+
+    # Data de referência
+    df["data_referencia"] = pd.to_datetime(
+        df["ano"].astype(str) + "-" + df["mes"].astype(str).str.zfill(2) + "-01",
+        errors="coerce"
+    ).dt.date
+
+    # Normaliza operadora
+    df["_op"] = df.get("_emp", pd.Series(dtype=str)).apply(normalizar_operadora)
+
+    # Deriva colunas de tecnologia
+    for col in ["acessos_2g","acessos_3g","acessos_4g","acessos_5g","acessos_prepago","acessos_pospago"]:
+        if col not in df.columns:
+            df[col] = None
+
+    if "_tec" in df.columns:
+        t = df["_tec"].str.upper().fillna("")
+        for g, c in [("2G","acessos_2g"),("3G","acessos_3g"),("4G","acessos_4g"),("5G","acessos_5g")]:
+            df.loc[t.str.contains(g), c] = df["acessos_total"]
+
+    if "_nat" in df.columns:
+        n = df["_nat"].str.upper().fillna("")
+        df.loc[n.str.contains("PRÉ|PRE"), "acessos_prepago"] = df["acessos_total"]
+        df.loc[n.str.contains("PÓS|POS"), "acessos_pospago"] = df["acessos_total"]
+
+    return df
+
 # ── FUNÇÃO ATUALIZADA: etl_movel agora processa chunk por chunk via iterar_zip ──
 def etl_movel(sb):
     log.info("=" * 60)
