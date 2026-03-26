@@ -280,7 +280,7 @@ def transformar_smp(df, ano):
         df["ano"].astype(str) + "-" + df["mes"].astype(str).str.zfill(2) + "-01", errors="coerce"
     ).dt.date
 
-    df["_op"] = df.get("_emp", pd.Series(dtype=str)).apply(normalizar_operadora)
+    df["_op"] = df["_emp"].apply(normalizar_operadora) if "_emp" in df.columns else "Outras"
 
     for col in ["acessos_2g", "acessos_3g", "acessos_4g", "acessos_5g", "acessos_prepago", "acessos_pospago"]:
         if col not in df.columns:
