@@ -115,6 +115,11 @@ def iterar_zip(fonte, chunksize=50000):
         log.info(f"  {len(csvs)} CSV(s) encontrado(s)")
 
         for nome in csvs:
+            # Usa apenas arquivos _Colunas que têm código IBGE
+            if "_colunas" not in nome.lower():
+                log.info(f"    Pulando {nome} (sem código IBGE)")
+                continue
+
             # Pula arquivos fora da janela temporal pelo nome
             anos_validos = [str(a) for a in range(ANO_INICIO, ANO_FIM + 1)]
             if not any(a in nome for a in anos_validos) and any(
