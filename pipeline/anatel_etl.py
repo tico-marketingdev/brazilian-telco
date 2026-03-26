@@ -236,76 +236,59 @@ COLS_SMP = {
 
 # ── TRANSFORMAÇÃO: normaliza o chunk do SMP para o schema do banco ──
 def transformar_smp(df, ano):
-    """
-    Recebe um chunk bruto do CSV da Anatel e retorna
-    um DataFrame pronto para upsert na fato_movel.
-    """
-    # Mapeamento de colunas do CSV para o schema
-COLS = {
-    "ano":                        "ano",
-    "mês":                        "mes",
-    "mes":                        "mes",
-    "município":                  "_municipio_raw",
-    "municipio":                  "_municipio_raw",
-    "código ibge município":      "cod_ibge",
-    "codigo ibge municipio":      "cod_ibge",
-    "cod_municipio_ibge":         "cod_ibge",
-    "empresa":                    "_emp",
-    "grupo econômico":            "_grupo",
-    "grupo economico":            "_grupo",
-    "tecnologia geração":         "_tec",
-    "tecnologia geracao":         "_tec",
-    "tecnologia":                 "_tec",
-    "modalidade de cobrança":     "_nat",
-    "modalidade de cobranca":     "_nat",
-    "acessos":                    "acessos_total",
-}
+    COLS = {
+        "ano": "ano",
+        "mês": "mes",
+        "mes": "mes",
+        "município": "_municipio_raw",
+        "municipio": "_municipio_raw",
+        "código ibge município": "cod_ibge",
+        "codigo ibge municipio": "cod_ibge",
+        "cod_municipio_ibge": "cod_ibge",
+        "empresa": "_emp",
+        "grupo econômico": "_grupo",
+        "grupo economico": "_grupo",
+        "tecnologia geração": "_tec",
+        "tecnologia geracao": "_tec",
+        "tecnologia": "_tec",
+        "modalidade de cobrança": "_nat",
+        "modalidade de cobranca": "_nat",
+        "acessos": "acessos_total",
+    }
+    df = df.rename(columns={c: COLS.get(c, c) for c in df.columns})
 
-df = df.rename(columns={c: COLS.get(c, c) for c in df.columns})
-
-# Detecta colunas de mês no formato YYYY-MM e converte para linhas
-meses_cols = [c for c in df.columns if len(c) == 7 and c[4] == "-" and c[:4].isdigit()]
- if meses_cols and "cod_ibge" in df.columns:
+    meses_cols = [c for c in df.columns if len(c) == 7 and c[4] == "-" and c[:4].isdigit()]
+    if meses_cols and "cod_ibge" in df.columns:
         id_cols = [c for c in df.columns if c not in meses_cols]
-        df = df.melt(
-            id_vars=id_cols,
-            value_vars=meses_cols,
-            var_name="_ano_mes",
-            value_name="acessos_total"
-        )
-    df["ano"] = df["_ano_mes"].str[:4].astype(int)
-    df["mes"] = df["_ano_mes"].str[5:].astype(int)
+        df = df.melt(id_vars=id_cols, value_vars=meses_cols, var_name="_ano_mes", value_name="acessos_total")
+        df["ano"] = df["_ano_mes"].str[:4].astype(int)
+        df["mes"] = df["_ano_mes"].str[5:].astype(int)
 
- if "cod_ibge" not in df.columns:
+    if "cod_ibge" not in df.columns:
         return pd.DataFrame()
 
-    # Converte tipos
-    df["ano"]          = pd.to_numeric(df.get("ano", ano), errors="coerce").fillna(ano).astype(int)
-    df["mes"]          = pd.to_numeric(df.get("mes", 1),   errors="coerce").astype("Int64")
-    df["cod_ibge"]     = pd.to_numeric(df["cod_ibge"],     errors="coerce").astype("Int64")
-    df["acessos_total"]= pd.to_numeric(df.get("acessos_total", 0), errors="coerce").fillna(0).astype(int)
-
+    df["ano"] = pd.to_numeric(df.get("ano", ano), errors="coerce").fillna(ano).astype(int)
+    df["mes"] = pd.to_numeric(df.get("mes", 1), errors="coerce").astype("Int64")
+    df["cod_ibge"] = pd.to_numeric(df["cod_ibge"], errors="coerce").astype("Int64")
+    df["acessos_total"] = pd.to_numeric(df.get("acessos_total", 0), errors="coerce").fillna(0).astype(int)
     df = df[df["ano"].between(ANO_INICIO, ANO_FIM)].dropna(subset=["cod_ibge", "mes"])
+
     if df.empty:
         return pd.DataFrame()
 
-    # Data de referência
     df["data_referencia"] = pd.to_datetime(
-        df["ano"].astype(str) + "-" + df["mes"].astype(str).str.zfill(2) + "-01",
-        errors="coerce"
+        df["ano"].astype(str) + "-" + df["mes"].astype(str).str.zfill(2) + "-01", errors="coerce"
     ).dt.date
 
-    # Normaliza operadora
     df["_op"] = df.get("_emp", pd.Series(dtype=str)).apply(normalizar_operadora)
 
-    # Deriva colunas de tecnologia
-    for col in ["acessos_2g","acessos_3g","acessos_4g","acessos_5g","acessos_prepago","acessos_pospago"]:
+    for col in ["acessos_2g", "acessos_3g", "acessos_4g", "acessos_5g", "acessos_prepago", "acessos_pospago"]:
         if col not in df.columns:
             df[col] = None
 
     if "_tec" in df.columns:
         t = df["_tec"].str.upper().fillna("")
-        for g, c in [("2G","acessos_2g"),("3G","acessos_3g"),("4G","acessos_4g"),("5G","acessos_5g")]:
+        for g, c in [("2G", "acessos_2g"), ("3G", "acessos_3g"), ("4G", "acessos_4g"), ("5G", "acessos_5g")]:
             df.loc[t.str.contains(g), c] = df["acessos_total"]
 
     if "_nat" in df.columns:
