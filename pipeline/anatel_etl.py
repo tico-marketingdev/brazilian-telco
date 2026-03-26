@@ -56,21 +56,46 @@ def get_supabase():
         raise EnvironmentError("Defina SUPABASE_URL e SUPABASE_KEY no .env")
     return create_client(url, key)
 
-def baixar_zip(url):
-    log.info(f"Baixando: {url}")
-    r = requests.get(url, timeout=120)
-    r.raise_for_status()
+def baixar_zip(fonte, chunksize=100000):
+    log.info(f"Lendo: {fonte}")
+    if fonte.startswith("http"):
+        r = requests.get(fonte, timeout=300)
+        r.raise_for_status()
+        conteudo = io.BytesIO(r.content)
+    else:
+        conteudo = open(fonte, "rb")
+
     dfs = []
-    with zipfile.ZipFile(io.BytesIO(r.content)) as z:
-        for nome in [n for n in z.namelist() if n.lower().endswith(".csv")]:
+    with zipfile.ZipFile(conteudo) as z:
+        csvs = [n for n in z.namelist() if n.lower().endswith(".csv")]
+        log.info(f"  {len(csvs)} CSV(s) encontrado(s)")
+        for nome in csvs:
+            # Pula arquivos claramente fora da janela temporal pelo nome
+            anos_no_nome = [str(a) for a in range(ANO_INICIO, ANO_FIM + 1)]
+            if not any(a in nome for a in anos_no_nome) and any(
+                str(a) in nome for a in range(2005, ANO_INICIO)
+            ):
+                log.info(f"    Pulando {nome} (fora da janela)")
+                continue
             with z.open(nome) as f:
                 try:
-                    df = pd.read_csv(f, sep=";", encoding="utf-8-sig", dtype=str, low_memory=False)
-                    df.columns = [c.strip().lower().replace(" ", "_") for c in df.columns]
-                    dfs.append(df)
-                    log.info(f"  {nome}: {len(df):,} linhas")
+                    chunks = []
+                    for chunk in pd.read_csv(
+                        f, sep=";", encoding="utf-8-sig",
+                        dtype=str, low_memory=False,
+                        chunksize=chunksize
+                    ):
+                        chunk.columns = [c.strip().lower().replace(" ", "_") for c in chunk.columns]
+                        if "ano" in chunk.columns:
+                            chunk = chunk[pd.to_numeric(chunk["ano"], errors="coerce").between(ANO_INICIO, ANO_FIM)]
+                        if not chunk.empty:
+                            chunks.append(chunk)
+                    if chunks:
+                        df = pd.concat(chunks, ignore_index=True)
+                        dfs.append(df)
+                        log.info(f"    {nome}: {len(df):,} linhas")
                 except Exception as e:
-                    log.warning(f"  Erro {nome}: {e}")
+                    log.warning(f"    Erro {nome}: {e}")
     return dfs
 
 def registrar_log(sb, tabela, arquivo, data_ref, status, ok=0, err=0, msg=None):
@@ -170,10 +195,11 @@ def etl_movel(sb):
     cur.close()
     conn.close()
     total_ok = total_err = 0
-
     log.info("Baixando SMP...")
+    fonte_smp = "/tmp/smp.zip" if os.path.exists("/tmp/smp.zip") else URL_SMP
+    log.info(f"Fonte: {fonte_smp}")
     try:
-        dfs = baixar_zip(URL_SMP)
+        dfs = baixar_zip(fonte_smp)
     except requests.HTTPError as e:
         log.warning(f"  Erro ao baixar SMP: {e}")
         registrar_log(sb, "fato_movel", URL_SMP, None, "erro", msg=str(e))
