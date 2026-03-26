@@ -263,7 +263,7 @@ def transformar_smp(df, ano):
     df = df.rename(columns={c: COLS.get(c, c) for c in df.columns})
 
     meses_cols = [c for c in df.columns if len(c) == 7 and c[4] == "-" and c[:4].isdigit()]
-    if meses_cols and "cod_ibge" in df.columns:
+    if meses_cols:
         id_cols = list(df.columns[~df.columns.isin(meses_cols)])
         df = df.melt(
             id_vars=id_cols,
@@ -365,8 +365,9 @@ def etl_movel(sb):
             total_err += err
 
     except Exception as e:
+        import traceback
         log.error(f"Erro no ETL móvel: {e}")
-        registrar_log(sb, "fato_movel", fonte_smp, None, "erro", msg=str(e))
+        log.error(traceback.format_exc())
 
     # Registra resultado final
     registrar_log(sb, "fato_movel", fonte_smp, None,
