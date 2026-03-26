@@ -98,6 +98,55 @@ def baixar_zip(fonte, chunksize=100000):
                     log.warning(f"    Erro {nome}: {e}")
     return dfs
 
+# ── NOVA FUNÇÃO: gerador que processa o ZIP chunk por chunk sem acumular na memória ──
+def iterar_zip(fonte, chunksize=50000):
+    """
+    Em vez de carregar o CSV inteiro na memória (como o baixar_zip fazia),
+    esta função GERA um chunk de cada vez — processa 50k linhas, libera,
+    processa as próximas 50k, e assim por diante.
+    """
+    # Abre o arquivo local ou baixa da URL
+    conteudo = open(fonte, "rb") if not fonte.startswith("http") else io.BytesIO(
+        requests.get(fonte, timeout=300).content
+    )
+
+    with zipfile.ZipFile(conteudo) as z:
+        csvs = [n for n in z.namelist() if n.lower().endswith(".csv")]
+        log.info(f"  {len(csvs)} CSV(s) encontrado(s)")
+
+        for nome in csvs:
+            # Pula arquivos fora da janela temporal pelo nome
+            anos_validos = [str(a) for a in range(ANO_INICIO, ANO_FIM + 1)]
+            if not any(a in nome for a in anos_validos) and any(
+                str(a) in nome for a in range(2005, ANO_INICIO)
+            ):
+                log.info(f"    Pulando {nome} (fora da janela)")
+                continue
+
+            log.info(f"    Processando {nome}...")
+            with z.open(nome) as f:
+                try:
+                    for chunk in pd.read_csv(
+                        f, sep=";", encoding="utf-8-sig",
+                        dtype=str, low_memory=False,
+                        chunksize=chunksize      # <-- lê 50k linhas por vez
+                    ):
+                        # Padroniza nomes das colunas
+                        chunk.columns = [c.strip().lower().replace(" ", "_") for c in chunk.columns]
+
+                        # Filtra pela janela temporal dentro do chunk
+                        if "ano" in chunk.columns:
+                            chunk = chunk[
+                                pd.to_numeric(chunk["ano"], errors="coerce").between(ANO_INICIO, ANO_FIM)
+                            ]
+
+                        # Só gera o chunk se não estiver vazio após o filtro
+                        if not chunk.empty:
+                            yield nome, chunk   # <-- retorna o chunk para quem chamou
+
+                except Exception as e:
+                    log.warning(f"    Erro {nome}: {e}")
+
 def registrar_log(sb, tabela, arquivo, data_ref, status, ok=0, err=0, msg=None):
     import psycopg2
     conn = psycopg2.connect(os.getenv("DB_URL"))
@@ -185,70 +234,69 @@ COLS_SMP = {
     "tecnologia":"_tec","natureza":"_nat","acessos":"acessos_total","quantidade":"acessos_total",
 }
 
+# ── FUNÇÃO ATUALIZADA: etl_movel agora processa chunk por chunk via iterar_zip ──
 def etl_movel(sb):
     log.info("=" * 60)
     log.info("STEP: fato_movel (SMP)")
+
+    # Busca o mapa de operadoras do banco
     conn = psycopg2.connect(os.getenv("DB_URL"))
     cur = conn.cursor()
     cur.execute("SELECT nome_operadora, id_operadora FROM anatel.dim_operadoras")
     mapa_op = {row[0]: row[1] for row in cur.fetchall()}
     cur.close()
     conn.close()
+
     total_ok = total_err = 0
-    log.info("Baixando SMP...")
+
+    # Define a fonte — arquivo local se existir, senão baixa da URL
     fonte_smp = "/tmp/smp.zip" if os.path.exists("/tmp/smp.zip") else URL_SMP
     log.info(f"Fonte: {fonte_smp}")
-    try:
-        dfs = baixar_zip(fonte_smp)
-    except requests.HTTPError as e:
-        log.warning(f"  Erro ao baixar SMP: {e}")
-        registrar_log(sb, "fato_movel", URL_SMP, None, "erro", msg=str(e))
-        return
 
-    for df_raw in dfs:
-            df = df.rename(columns={c: COLS_SMP.get(c, c) for c in df.columns})
-            if "cod_ibge" not in df.columns:
+    try:
+        # Itera chunk por chunk — nunca carrega tudo na memória
+        for nome_csv, chunk in iterar_zip(fonte_smp):
+
+            # Transforma o chunk (normaliza colunas, tipos, operadora, etc.)
+            df = transformar_smp(chunk, ANO_INICIO)
+            if df.empty:
                 continue
-            df["ano"] = pd.to_numeric(df.get("ano", ano), errors="coerce").fillna(ano).astype(int)
-            df["mes"] = pd.to_numeric(df.get("mes", 1),   errors="coerce").astype("Int64")
-            df["cod_ibge"] = pd.to_numeric(df["cod_ibge"], errors="coerce").astype("Int64")
-            df["acessos_total"] = pd.to_numeric(df.get("acessos_total", 0), errors="coerce").fillna(0).astype(int)
-            df = df[df["ano"].between(ANO_INICIO, ANO_FIM)].dropna(subset=["cod_ibge","mes"])
-            df["data_referencia"] = pd.to_datetime(
-                df["ano"].astype(str)+"-"+df["mes"].astype(str).str.zfill(2)+"-01", errors="coerce").dt.date
-            df["_op"] = df.get("_emp", pd.Series(dtype=str)).apply(normalizar_operadora)
-            for col in ["acessos_2g","acessos_3g","acessos_4g","acessos_5g","acessos_prepago","acessos_pospago"]:
-                if col not in df.columns: df[col] = None
-            if "_tec" in df.columns:
-                t = df["_tec"].str.upper().fillna("")
-                for g, c in [("2G","acessos_2g"),("3G","acessos_3g"),("4G","acessos_4g"),("5G","acessos_5g")]:
-                    df.loc[t.str.contains(g), c] = df["acessos_total"]
-            if "_nat" in df.columns:
-                n = df["_nat"].str.upper().fillna("")
-                df.loc[n.str.contains("PRÉ|PRE"), "acessos_prepago"] = df["acessos_total"]
-                df.loc[n.str.contains("PÓS|POS"), "acessos_pospago"] = df["acessos_total"]
-            df = df.groupby(["data_referencia","ano","mes","_op","cod_ibge"], as_index=False).agg({
-                "acessos_total":"sum","acessos_prepago":"sum","acessos_pospago":"sum",
-                "acessos_2g":"sum","acessos_3g":"sum","acessos_4g":"sum","acessos_5g":"sum"})
+
+            # Resolve FK da operadora
             df["id_operadora"] = df["_op"].map(mapa_op)
             df = df.dropna(subset=["id_operadora"])
+            if df.empty:
+                continue
+
+            # Monta lista de dicts para upsert
             registros = [{
-                "data_referencia": row["data_referencia"].isoformat(),
-                "ano": int(row["ano"]), "mes": int(row["mes"]),
-                "id_operadora": int(row["id_operadora"]), "cod_ibge": int(row["cod_ibge"]),
-                "acessos_total":   int(row["acessos_total"])   if pd.notna(row["acessos_total"])   else None,
-                "acessos_prepago": int(row["acessos_prepago"]) if pd.notna(row.get("acessos_prepago")) else None,
-                "acessos_pospago": int(row["acessos_pospago"]) if pd.notna(row.get("acessos_pospago")) else None,
-                "acessos_2g": int(row["acessos_2g"]) if pd.notna(row.get("acessos_2g")) else None,
-                "acessos_3g": int(row["acessos_3g"]) if pd.notna(row.get("acessos_3g")) else None,
-                "acessos_4g": int(row["acessos_4g"]) if pd.notna(row.get("acessos_4g")) else None,
-                "acessos_5g": int(row["acessos_5g"]) if pd.notna(row.get("acessos_5g")) else None,
-                "fonte_arquivo": url,
+                "data_referencia":  row["data_referencia"].isoformat(),
+                "ano":              int(row["ano"]),
+                "mes":              int(row["mes"]),
+                "id_operadora":     int(row["id_operadora"]),
+                "cod_ibge":         int(row["cod_ibge"]),
+                "acessos_total":    int(row["acessos_total"])   if pd.notna(row.get("acessos_total"))   else None,
+                "acessos_prepago":  int(row["acessos_prepago"]) if pd.notna(row.get("acessos_prepago")) else None,
+                "acessos_pospago":  int(row["acessos_pospago"]) if pd.notna(row.get("acessos_pospago")) else None,
+                "acessos_2g":       int(row["acessos_2g"])      if pd.notna(row.get("acessos_2g"))      else None,
+                "acessos_3g":       int(row["acessos_3g"])      if pd.notna(row.get("acessos_3g"))      else None,
+                "acessos_4g":       int(row["acessos_4g"])      if pd.notna(row.get("acessos_4g"))      else None,
+                "acessos_5g":       int(row["acessos_5g"])      if pd.notna(row.get("acessos_5g"))      else None,
+                "fonte_arquivo":    nome_csv,
             } for _, row in df.iterrows()]
+
+            # Upsert no Supabase
             ok, err = upsert_lotes(sb, "fato_movel", registros)
-            total_ok += ok; total_err += err
-            registrar_log(sb, "fato_movel", url, df["data_referencia"].min() if not df.empty else None,
-                          "sucesso" if err==0 else "parcial", ok, err)
+            total_ok += ok
+            total_err += err
+
+    except Exception as e:
+        log.error(f"Erro no ETL móvel: {e}")
+        registrar_log(sb, "fato_movel", fonte_smp, None, "erro", msg=str(e))
+
+    # Registra resultado final
+    registrar_log(sb, "fato_movel", fonte_smp, None,
+                  "sucesso" if total_err == 0 else "parcial", total_ok, total_err)
     log.info(f"\n✓ fato_movel: {total_ok:,} inseridos | {total_err:,} erros")
 
 COLS_SCM = {
