@@ -263,9 +263,9 @@ COLS = {
 
 df = df.rename(columns={c: COLS.get(c, c) for c in df.columns})
 
-    # Detecta colunas de mês no formato YYYY-MM e converte para linhas
-    meses_cols = [c for c in df.columns if len(c) == 7 and c[4] == "-" and c[:4].isdigit()]
-    if meses_cols and "cod_ibge" in df.columns:
+# Detecta colunas de mês no formato YYYY-MM e converte para linhas
+meses_cols = [c for c in df.columns if len(c) == 7 and c[4] == "-" and c[:4].isdigit()]
+if meses_cols and "cod_ibge" in df.columns:
         id_cols = [c for c in df.columns if c not in meses_cols]
         df = df.melt(
             id_vars=id_cols,
@@ -276,7 +276,7 @@ df = df.rename(columns={c: COLS.get(c, c) for c in df.columns})
         df["ano"] = df["_ano_mes"].str[:4].astype(int)
         df["mes"] = df["_ano_mes"].str[5:].astype(int)
 
-    if "cod_ibge" not in df.columns:
+if "cod_ibge" not in df.columns:
         return pd.DataFrame()
 
     # Converte tipos
