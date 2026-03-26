@@ -242,24 +242,24 @@ COLS_SMP = {
 # ── TRANSFORMAÇÃO: normaliza o chunk do SMP para o schema do banco ──
 def transformar_smp(df, ano):
     COLS = {
-    "ano": "ano",
-    "mês": "mes",
-    "mes": "mes",
-    "município": "_municipio_raw",
-    "municipio": "_municipio_raw",
-    "código_ibge_município": "cod_ibge",    # com acento
-    "codigo_ibge_municipio": "cod_ibge",    # sem acento
-    "cod_municipio_ibge": "cod_ibge",
-    "empresa": "_emp",
-    "grupo_econômico": "_grupo",            # com acento
-    "grupo_economico": "_grupo",            # sem acento
-    "tecnologia_geração": "_tec",           # com acento
-    "tecnologia_geracao": "_tec",           # sem acento
-    "tecnologia": "_tec",
-    "modalidade_de_cobrança": "_nat",       # com acento
-    "modalidade_de_cobranca": "_nat",       # sem acento
-    "acessos": "acessos_total",
-}
+        "ano": "ano",
+        "mês": "mes",
+        "mes": "mes",
+        "município": "_municipio_raw",
+        "municipio": "_municipio_raw",
+        "código_ibge_município": "cod_ibge",    # com acento
+        "codigo_ibge_municipio": "cod_ibge",    # sem acento
+        "cod_municipio_ibge": "cod_ibge",
+        "empresa": "_emp",
+        "grupo_econômico": "_grupo",            # com acento
+        "grupo_economico": "_grupo",            # sem acento
+        "tecnologia_geração": "_tec",           # com acento
+        "tecnologia_geracao": "_tec",           # sem acento
+        "tecnologia": "_tec",
+        "modalidade_de_cobrança": "_nat",       # com acento
+        "modalidade_de_cobranca": "_nat",       # sem acento
+        "acessos": "acessos_total",
+    }
     df = df.rename(columns={c: COLS.get(c, c) for c in df.columns})
 
     meses_cols = [c for c in df.columns if len(c) == 7 and c[4] == "-" and c[:4].isdigit()]
