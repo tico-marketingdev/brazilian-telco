@@ -237,24 +237,24 @@ COLS_SMP = {
 # ── TRANSFORMAÇÃO: normaliza o chunk do SMP para o schema do banco ──
 def transformar_smp(df, ano):
     COLS = {
-        "ano": "ano",
-        "mês": "mes",
-        "mes": "mes",
-        "município": "_municipio_raw",
-        "municipio": "_municipio_raw",
-        "código ibge município": "cod_ibge",
-        "codigo ibge municipio": "cod_ibge",
-        "cod_municipio_ibge": "cod_ibge",
-        "empresa": "_emp",
-        "grupo econômico": "_grupo",
-        "grupo economico": "_grupo",
-        "tecnologia geração": "_tec",
-        "tecnologia geracao": "_tec",
-        "tecnologia": "_tec",
-        "modalidade de cobrança": "_nat",
-        "modalidade de cobranca": "_nat",
-        "acessos": "acessos_total",
-    }
+    "ano": "ano",
+    "mês": "mes",
+    "mes": "mes",
+    "município": "_municipio_raw",
+    "municipio": "_municipio_raw",
+    "código_ibge_município": "cod_ibge",
+    "codigo_ibge_municipio": "cod_ibge",
+    "cod_municipio_ibge": "cod_ibge",
+    "empresa": "_emp",
+    "grupo_econômico": "_grupo",
+    "grupo_economico": "_grupo",
+    "tecnologia_geração": "_tec",
+    "tecnologia_geracao": "_tec",
+    "tecnologia": "_tec",
+    "modalidade_de_cobrança": "_nat",
+    "modalidade_de_cobranca": "_nat",
+    "acessos": "acessos_total",
+}
     df = df.rename(columns={c: COLS.get(c, c) for c in df.columns})
 
     meses_cols = [c for c in df.columns if len(c) == 7 and c[4] == "-" and c[:4].isdigit()]
