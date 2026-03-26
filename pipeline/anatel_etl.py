@@ -264,8 +264,13 @@ def transformar_smp(df, ano):
 
     meses_cols = [c for c in df.columns if len(c) == 7 and c[4] == "-" and c[:4].isdigit()]
     if meses_cols and "cod_ibge" in df.columns:
-        id_cols = [c for c in df.columns if c not in meses_cols]
-        df = df.melt(id_vars=id_cols, value_vars=meses_cols, var_name="_ano_mes", value_name="acessos_total")
+        id_cols = list(df.columns[~df.columns.isin(meses_cols)])
+        df = df.melt(
+            id_vars=id_cols,
+            value_vars=meses_cols,
+            var_name="_ano_mes",
+            value_name="acessos_total"
+        )
         df["ano"] = df["_ano_mes"].str[:4].astype(int)
         df["mes"] = df["_ano_mes"].str[5:].astype(int)
 
