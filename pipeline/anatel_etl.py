@@ -241,15 +241,39 @@ def transformar_smp(df, ano):
     um DataFrame pronto para upsert na fato_movel.
     """
     # Mapeamento de colunas do CSV para o schema
-    COLS = {
-        "ano": "ano", "mes": "mes",
-        "cod_municipio_ibge": "cod_ibge",
-        "codigo_municipio_ibge": "cod_ibge",
-        "empresa": "_emp", "prestadora": "_emp",
-        "tecnologia": "_tec", "natureza": "_nat",
-        "acessos": "acessos_total", "quantidade": "acessos_total",
-    }
+COLS = {
+    "ano":                        "ano",
+    "mês":                        "mes",
+    "mes":                        "mes",
+    "município":                  "_municipio_raw",
+    "municipio":                  "_municipio_raw",
+    "código ibge município":      "cod_ibge",
+    "codigo ibge municipio":      "cod_ibge",
+    "cod_municipio_ibge":         "cod_ibge",
+    "empresa":                    "_emp",
+    "grupo econômico":            "_grupo",
+    "grupo economico":            "_grupo",
+    "tecnologia geração":         "_tec",
+    "tecnologia geracao":         "_tec",
+    "tecnologia":                 "_tec",
+    "modalidade de cobrança":     "_nat",
+    "modalidade de cobranca":     "_nat",
+    "acessos":                    "acessos_total",
+}
     df = df.rename(columns={c: COLS.get(c, c) for c in df.columns})
+
+    # Detecta colunas de mês no formato YYYY-MM e converte para linhas
+    meses_cols = [c for c in df.columns if len(c) == 7 and c[4] == "-" and c[:4].isdigit()]
+    if meses_cols and "cod_ibge" in df.columns:
+        id_cols = [c for c in df.columns if c not in meses_cols]
+        df = df.melt(
+            id_vars=id_cols,
+            value_vars=meses_cols,
+            var_name="_ano_mes",
+            value_name="acessos_total"
+        )
+        df["ano"] = df["_ano_mes"].str[:4].astype(int)
+        df["mes"] = df["_ano_mes"].str[5:].astype(int)
 
     if "cod_ibge" not in df.columns:
         return pd.DataFrame()
