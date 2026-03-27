@@ -131,24 +131,17 @@ def iterar_zip(fonte, chunksize=50000):
             log.info(f"    Processando {nome}...")
             with z.open(nome) as f:
                 try:
-                    for chunk in pd.read_csv(
-                        f, sep=";", encoding="utf-8-sig",
-                        dtype=str, low_memory=False,
-                        chunksize=chunksize      # <-- lê 50k linhas por vez
-                    ):
-                        # Padroniza nomes das colunas
-                        chunk.columns = [c.strip().lower().replace(" ", "_") for c in chunk.columns]
-
-                        # Filtra pela janela temporal dentro do chunk
-                        if "ano" in chunk.columns:
-                            chunk = chunk[
-                                pd.to_numeric(chunk["ano"], errors="coerce").between(ANO_INICIO, ANO_FIM)
-                            ]
-
-                        # Só gera o chunk se não estiver vazio após o filtro
-                        if not chunk.empty:
-                            yield nome, chunk   # <-- retorna o chunk para quem chamou
-
+                    # Arquivos _Colunas são menores — lê inteiro de uma vez
+                    if "_colunas" in nome.lower():
+                        df = pd.read_csv(f, sep=";", encoding="utf-8-sig", dtype=str, low_memory=False)
+                        df.columns = [c.strip().lower().replace(" ", "_") for c in df.columns]
+                        if not df.empty:
+                            yield nome, df
+                    else:
+                        for chunk in pd.read_csv(f, sep=";", encoding="utf-8-sig", dtype=str, low_memory=False, chunksize=50000):
+                            chunk.columns = [c.strip().lower().replace(" ", "_") for c in chunk.columns]
+                            if not chunk.empty:
+                                yield nome, chunk
                 except Exception as e:
                     log.warning(f"    Erro {nome}: {e}")
 
@@ -330,6 +323,9 @@ def etl_movel(sb):
     try:
         # Itera chunk por chunk — nunca carrega tudo na memória
         for nome_csv, chunk in iterar_zip(fonte_smp):
+            print(f"tipo chunk: {type(chunk)}")  # linha temporária
+            print(f"shape chunk: {chunk.shape}")  # linha temporária
+            df = transformar_smp(chunk, ANO_INICIO)
 
             # Transforma o chunk (normaliza colunas, tipos, operadora, etc.)
             df = transformar_smp(chunk, ANO_INICIO)
