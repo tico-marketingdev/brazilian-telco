@@ -257,10 +257,11 @@ def transformar_smp(df, ano):
 
     meses_cols = [c for c in df.columns if len(c) == 7 and c[4] == "-" and c[:4].isdigit()]
     if meses_cols:
-        id_cols = list(df.columns[~df.columns.isin(meses_cols)])
-        df = df.melt(
+        id_cols = [c for c in df.columns if c not in meses_cols]
+        df = pd.melt(
+            df,
             id_vars=id_cols,
-            value_vars=list(meses_cols),
+            value_vars=meses_cols,
             var_name="_ano_mes",
             value_name="acessos_total"
         )
