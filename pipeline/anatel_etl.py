@@ -260,8 +260,6 @@ def transformar_smp(df, ano):
         id_cols = [c for c in df.columns if c not in meses_cols]
         # Verifica se todos os id_cols existem
         missing = [c for c in id_cols if c not in df.columns]
-        print(f"DEBUG missing id_cols: {missing}")
-        print(f"DEBUG df.columns: {list(df.columns)}")
         df = pd.melt(
             df,
             id_vars=id_cols,
@@ -328,8 +326,6 @@ def etl_movel(sb):
     try:
         # Itera chunk por chunk — nunca carrega tudo na memória
         for nome_csv, chunk in iterar_zip(fonte_smp):
-            print(f"tipo chunk: {type(chunk)}")  # linha temporária
-            print(f"shape chunk: {chunk.shape}")  # linha temporária
             df = transformar_smp(chunk, ANO_INICIO)
 
             # Transforma o chunk (normaliza colunas, tipos, operadora, etc.)
