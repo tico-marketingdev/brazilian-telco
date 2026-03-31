@@ -235,29 +235,33 @@ COLS_SMP = {
 # ── TRANSFORMAÇÃO: normaliza o chunk do SMP para o schema do banco ──
 def transformar_smp(df, ano):
     COLS = {
-        "ano": "ano",
-        "mês": "mes",
-        "mes": "mes",
-        "município": "_municipio_raw",
-        "municipio": "_municipio_raw",
-        "código_ibge_município": "cod_ibge",    # com acento
-        "codigo_ibge_municipio": "cod_ibge",    # sem acento
-        "cod_municipio_ibge": "cod_ibge",
-        "empresa": "_emp",
-        "grupo_econômico": "_grupo",            # com acento
-        "grupo_economico": "_grupo",            # sem acento
-        "tecnologia_geração": "_tec",           # com acento
-        "tecnologia_geracao": "_tec",           # sem acento
-        "tecnologia": "_tec",
-        "modalidade_de_cobrança": "_nat",       # com acento
-        "modalidade_de_cobranca": "_nat",       # sem acento
-        "acessos": "acessos_total",
-    }
+    "ano": "ano",
+    "mês": "mes",
+    "mes": "mes",
+    "município": "_municipio_raw",
+    "municipio": "_municipio_raw",
+    "código_ibge_município": "cod_ibge",
+    "codigo_ibge_municipio": "cod_ibge",
+    "cod_municipio_ibge": "cod_ibge",
+    "empresa": "_emp",
+    "grupo_econômico": "_grupo",
+    "grupo_economico": "_grupo",
+    "tecnologia_geração": "_tec",      # geração (2G, 3G, 4G) — essa é a que queremos
+    "tecnologia_geracao": "_tec",
+    "tecnologia": "_tec_tipo",         # tipo (GSM, LTE) — nome diferente
+    "modalidade_de_cobrança": "_nat",
+    "modalidade_de_cobranca": "_nat",
+    "acessos": "acessos_total",
+}
     df = df.rename(columns={c: COLS.get(c, c) for c in df.columns})
 
     meses_cols = [c for c in df.columns if len(c) == 7 and c[4] == "-" and c[:4].isdigit()]
     if meses_cols:
         id_cols = [c for c in df.columns if c not in meses_cols]
+        # Verifica se todos os id_cols existem
+        missing = [c for c in id_cols if c not in df.columns]
+        print(f"DEBUG missing id_cols: {missing}")
+        print(f"DEBUG df.columns: {list(df.columns)}")
         df = pd.melt(
             df,
             id_vars=id_cols,
