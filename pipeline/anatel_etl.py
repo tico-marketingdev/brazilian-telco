@@ -398,58 +398,56 @@ def etl_banda_larga(sb):
         return
 
     for df_raw in dfs:
-        # ... resto do processamento permanece igual
-            df = df.rename(columns={c: COLS_SCM.get(c, c) for c in df.columns})
-            if "cod_ibge" not in df.columns:
-                continue
-            df["ano"] = pd.to_numeric(df.get("ano", ano), errors="coerce").fillna(ano).astype(int)
-            df["mes"] = pd.to_numeric(df.get("mes", 1),   errors="coerce").astype("Int64")
-            df["cod_ibge"] = pd.to_numeric(df["cod_ibge"], errors="coerce").astype("Int64")
-            df["acessos_total"] = pd.to_numeric(df.get("acessos_total", 0), errors="coerce").fillna(0).astype(int)
-            df = df[df["ano"].between(ANO_INICIO, ANO_FIM)].dropna(subset=["cod_ibge","mes"])
-            df["data_referencia"] = pd.to_datetime(
-                df["ano"].astype(str)+"-"+df["mes"].astype(str).str.zfill(2)+"-01", errors="coerce").dt.date
-            df["_op"] = df.get("_emp", pd.Series(dtype=str)).apply(normalizar_operadora)
-            if "tecnologia" in df.columns:
-                t = df["tecnologia"].str.upper().fillna("")
-                df["acessos_fibra"]    = df["acessos_total"].where(t.str.contains("FIBRA|FTT"), 0)
-                df["acessos_cabo"]     = df["acessos_total"].where(t.str.contains("CABO|HFC"),  0)
-                df["acessos_xdsl"]     = df["acessos_total"].where(t.str.contains("DSL"),       0)
-                df["acessos_radio"]    = df["acessos_total"].where(t.str.contains("RÁDIO|RADIO|WI-FI|WIMAX"), 0)
-                df["acessos_satelite"] = df["acessos_total"].where(t.str.contains("SATÉL|SATEL"), 0)
-                df["tecnologia"] = df["tecnologia"].str.strip().str.title()
-            else:
-                for col in ["acessos_fibra","acessos_cabo","acessos_xdsl","acessos_radio","acessos_satelite"]:
-                    df[col] = None
-            if "velocidade_contratada" not in df.columns:
-                df["velocidade_contratada"] = None
-            df = df.groupby(
-                ["data_referencia","ano","mes","_op","cod_ibge","tecnologia","velocidade_contratada"],
-                as_index=False, dropna=False
-            ).agg({"acessos_total":"sum","acessos_fibra":"sum","acessos_cabo":"sum",
-                   "acessos_xdsl":"sum","acessos_radio":"sum","acessos_satelite":"sum"})
-            df["id_operadora"] = df["_op"].map(mapa_op)
-            df = df.dropna(subset=["id_operadora"])
-            registros = [{
-                "data_referencia": row["data_referencia"].isoformat(),
-                "ano": int(row["ano"]), "mes": int(row["mes"]),
-                "id_operadora": int(row["id_operadora"]), "cod_ibge": int(row["cod_ibge"]),
-                "tecnologia": str(row["tecnologia"]) if pd.notna(row.get("tecnologia")) else None,
-                "velocidade_contratada": str(row["velocidade_contratada"]) if pd.notna(row.get("velocidade_contratada")) else None,
-                "acessos_total":    int(row["acessos_total"])    if pd.notna(row["acessos_total"])    else None,
-                "acessos_fibra":    int(row["acessos_fibra"])    if pd.notna(row.get("acessos_fibra"))    else None,
-                "acessos_cabo":     int(row["acessos_cabo"])     if pd.notna(row.get("acessos_cabo"))     else None,
-                "acessos_xdsl":     int(row["acessos_xdsl"])     if pd.notna(row.get("acessos_xdsl"))     else None,
-                "acessos_radio":    int(row["acessos_radio"])    if pd.notna(row.get("acessos_radio"))    else None,
-                "acessos_satelite": int(row["acessos_satelite"]) if pd.notna(row.get("acessos_satelite")) else None,
-                "fonte_arquivo": url,
-            } for _, row in df.iterrows()]
-            ok, err = upsert_lotes(sb, "fato_banda_larga", registros)
-            total_ok += ok; total_err += err
-            registrar_log(sb, "fato_banda_larga", url, df["data_referencia"].min() if not df.empty else None,
-                          "sucesso" if err==0 else "parcial", ok, err)
+        df = df_raw.rename(columns={c: COLS_SCM.get(c, c) for c in df_raw.columns})
+        if "cod_ibge" not in df.columns:
+            continue
+        df["ano"] = pd.to_numeric(df.get("ano", ANO_INICIO), errors="coerce").fillna(ANO_INICIO).astype(int)
+        df["mes"] = pd.to_numeric(df.get("mes", 1), errors="coerce").astype("Int64")
+        df["cod_ibge"] = pd.to_numeric(df["cod_ibge"], errors="coerce").astype("Int64")
+        df["acessos_total"] = pd.to_numeric(df.get("acessos_total", 0), errors="coerce").fillna(0).astype(int)
+        df = df[df["ano"].between(ANO_INICIO, ANO_FIM)].dropna(subset=["cod_ibge", "mes"])
+        df["data_referencia"] = pd.to_datetime(
+            df["ano"].astype(str) + "-" + df["mes"].astype(str).str.zfill(2) + "-01", errors="coerce"
+        ).dt.date
+        df["_op"] = df["_emp"].apply(normalizar_operadora) if "_emp" in df.columns else pd.Series("Outras", index=df.index)
+        if "tecnologia" in df.columns:
+            t = df["tecnologia"].str.upper().fillna("")
+            df["acessos_fibra"]    = df["acessos_total"].where(t.str.contains("FIBRA|FTT"), 0)
+            df["acessos_cabo"]     = df["acessos_total"].where(t.str.contains("CABO|HFC"), 0)
+            df["acessos_xdsl"]     = df["acessos_total"].where(t.str.contains("DSL"), 0)
+            df["acessos_radio"]    = df["acessos_total"].where(t.str.contains("RÁDIO|RADIO|WI-FI|WIMAX"), 0)
+            df["acessos_satelite"] = df["acessos_total"].where(t.str.contains("SATÉL|SATEL"), 0)
+            df["tecnologia"]       = df["tecnologia"].str.strip().str.title()
+        else:
+            for col in ["acessos_fibra", "acessos_cabo", "acessos_xdsl", "acessos_radio", "acessos_satelite"]:
+                df[col] = None
+        if "velocidade_contratada" not in df.columns:
+            df["velocidade_contratada"] = None
+        df = df.groupby(
+            ["data_referencia", "ano", "mes", "_op", "cod_ibge", "tecnologia", "velocidade_contratada"],
+            as_index=False, dropna=False
+        ).agg({"acessos_total": "sum", "acessos_fibra": "sum", "acessos_cabo": "sum",
+               "acessos_xdsl": "sum", "acessos_radio": "sum", "acessos_satelite": "sum"})
+        df["id_operadora"] = df["_op"].map(mapa_op)
+        df = df.dropna(subset=["id_operadora"])
+        registros = [{
+            "data_referencia": row["data_referencia"].isoformat(),
+            "ano": int(row["ano"]), "mes": int(row["mes"]),
+            "id_operadora": int(row["id_operadora"]), "cod_ibge": int(row["cod_ibge"]),
+            "tecnologia": str(row["tecnologia"]) if pd.notna(row.get("tecnologia")) else None,
+            "velocidade_contratada": str(row["velocidade_contratada"]) if pd.notna(row.get("velocidade_contratada")) else None,
+            "acessos_total":    int(row["acessos_total"])    if pd.notna(row["acessos_total"])    else None,
+            "acessos_fibra":    int(row["acessos_fibra"])    if pd.notna(row.get("acessos_fibra"))    else None,
+            "acessos_cabo":     int(row["acessos_cabo"])     if pd.notna(row.get("acessos_cabo"))     else None,
+            "acessos_xdsl":     int(row["acessos_xdsl"])     if pd.notna(row.get("acessos_xdsl"))     else None,
+            "acessos_radio":    int(row["acessos_radio"])    if pd.notna(row.get("acessos_radio"))    else None,
+            "acessos_satelite": int(row["acessos_satelite"]) if pd.notna(row.get("acessos_satelite")) else None,
+            "fonte_arquivo": URL_SCM,
+        } for _, row in df.iterrows()]
+        ok, err = upsert_lotes(sb, "fato_banda_larga", registros)
+        total_ok += ok
+        total_err += err
     log.info(f"\n✓ fato_banda_larga: {total_ok:,} inseridos | {total_err:,} erros")
-
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
